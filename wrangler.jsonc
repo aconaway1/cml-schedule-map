@@ -1,0 +1,9 @@
+{
+  "name": "cml-schedule-map",
+  "compatibility_date": "2025-09-18",
+  "main": "./src/index.js",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  }
+}

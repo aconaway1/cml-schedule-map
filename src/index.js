@@ -1,12 +1,23 @@
-const DEFAULT_LOCATION_URL = 'https://www.cousinsmainelobster.com/locations/springfield-il';
+const CML_LOCATION_URL = 'https://www.cousinsmainelobster.com/locations/springfield-il';
 const DEFAULT_STATE = 'IL';
 const SCHEDULE_API = 'https://lobster-staging.herokuapp.com/trucks/single-schedule';
 const UA = 'CML-Schedule-Map/1.0 (+https://cml.pages.dev)';
 
-export async function onRequest(context) {
-  const { env, request } = context;
-  const params = new URL(request.url).searchParams;
-  const locationUrl = params.get('locationUrl') || DEFAULT_LOCATION_URL;
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/api/schedule') {
+      return handleSchedule(url.searchParams, env);
+    }
+
+    // All other requests go to static assets
+    return env.ASSETS.fetch(request);
+  },
+};
+
+async function handleSchedule(params, env) {
+  const locationUrl = params.get('locationUrl') || CML_LOCATION_URL;
   const state = (params.get('state') || DEFAULT_STATE).toUpperCase();
 
   // Extract calendar IDs and truck name from CML location page's embedded __NEXT_DATA__
@@ -68,33 +79,29 @@ export async function onRequest(context) {
     }
   }
 
-  // Filter to the requested state — calendar IDs are shared across markets
-  const ilEvents = events.filter(ev => matchesState(ev.location, state));
+  // Filter to the requested state, sort by start time
+  const stateEvents = events
+    .filter(ev => matchesState(ev.location, state))
+    .sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
 
-  // Sort by start time
-  ilEvents.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
-
-  // Geocode each stop (Nominatim: ~1 req/sec policy)
+  // Geocode each stop sequentially, respecting Nominatim's 1 req/sec policy
   const stops = [];
-  for (const ev of ilEvents) {
+  for (const ev of stateEvents) {
     const tz = ev.startTz ?? 'America/Chicago';
-    const start = naiveLocalToUtc(stripOffset(ev.start), tz);
-    const end = ev.end ? naiveLocalToUtc(stripOffset(ev.end), tz) : null;
-
     const coords = await geocode(ev.location, env?.SCHEDULE_CACHE);
-    if (!coords) continue;
-
-    stops.push({
-      title: ev.summary,
-      address: ev.location,
-      start,
-      end,
-      timezone: tz,
-      isAllDay: ev.isAllDay ?? false,
-      lat: coords.lat,
-      lng: coords.lng,
-    });
-    await sleep(1100);
+    if (coords) {
+      stops.push({
+        title: ev.summary,
+        address: ev.location,
+        start: naiveLocalToUtc(stripOffset(ev.start), tz),
+        end: ev.end ? naiveLocalToUtc(stripOffset(ev.end), tz) : null,
+        timezone: tz,
+        isAllDay: ev.isAllDay ?? false,
+        lat: coords.lat,
+        lng: coords.lng,
+      });
+    }
+    if (!env?.SCHEDULE_CACHE) await sleep(1050); // only sleep when not cached
   }
 
   return new Response(JSON.stringify({ fetchedAt: new Date().toISOString(), count: stops.length, stops }), {
@@ -105,19 +112,14 @@ export async function onRequest(context) {
   });
 }
 
-// The API returns timestamps with an incorrect UTC offset (always -07:00 PDT).
+// The CML API returns timestamps with an incorrect UTC offset (always -07:00 PDT).
 // Strip it and treat the date/time part as a naive local time in the event's timezone.
 function stripOffset(isoStr) {
   return isoStr.replace(/[+-]\d{2}:\d{2}$/, '').replace(/Z$/, '');
 }
 
-// Convert a naive local datetime string ("2026-09-18T10:00:00") in a given IANA timezone
-// to a proper UTC ISO string, using Intl to determine the correct offset.
 function naiveLocalToUtc(naive, timezone) {
-  // Parse the naive string as if it were UTC (wrong value, but right calendar point)
   const fakeUtc = new Date(naive + 'Z');
-
-  // Ask Intl what time this "fake UTC" shows in the target timezone
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -126,15 +128,11 @@ function naiveLocalToUtc(naive, timezone) {
   });
   const p = Object.fromEntries(fmt.formatToParts(fakeUtc).map(({ type, value }) => [type, value]));
   const shownUtc = new Date(Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second));
-
-  // The offset between fakeUtc and what the timezone shows gives us how far to shift
-  const offsetMs = fakeUtc.getTime() - shownUtc.getTime();
-  return new Date(fakeUtc.getTime() + offsetMs).toISOString();
+  return new Date(fakeUtc.getTime() + (fakeUtc.getTime() - shownUtc.getTime())).toISOString();
 }
 
 function matchesState(address, stateAbbr) {
   if (!address) return false;
-  // Match ", TX" or ", TX " — how CML addresses are formatted
   return new RegExp(`,\\s*${stateAbbr}\\b`, 'i').test(address);
 }
 
