@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CML Schedule Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; display: flex; flex-direction: column; height: 100dvh; }
+
+    header {
+      background: #c0392b;
+      color: white;
+      flex-shrink: 0;
+    }
+    .header-main {
+      padding: 0.75rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .header-main h1 { font-size: 1.1rem; font-weight: 700; }
+    .header-main p { font-size: 0.85rem; opacity: 0.85; }
+    #status { font-size: 0.8rem; margin-left: auto; white-space: nowrap; opacity: 0.9; }
+    #config-toggle {
+      background: none; border: none; color: white; cursor: pointer;
+      font-size: 1.1rem; opacity: 0.75; padding: 0 0.25rem; flex-shrink: 0;
+    }
+    #config-toggle:hover { opacity: 1; }
+
+    #config-panel {
+      display: none;
+      padding: 0.75rem 1rem;
+      background: #a93226;
+      border-top: 1px solid rgba(255,255,255,0.15);
+    }
+    #config-panel.open { display: block; }
+    #config-form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: flex-end;
+    }
+    #config-form label { font-size: 0.75rem; opacity: 0.85; display: block; margin-bottom: 0.2rem; }
+    #config-form input {
+      font-size: 0.85rem;
+      padding: 0.3rem 0.5rem;
+      border: none;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.15);
+      color: white;
+      outline: none;
+    }
+    #config-form input::placeholder { color: rgba(255,255,255,0.5); }
+    #config-form input:focus { background: rgba(255,255,255,0.25); }
+    .config-field-url { flex: 1 1 280px; }
+    .config-field-url input { width: 100%; }
+    .config-field-state select {
+      font-size: 0.85rem;
+      padding: 0.3rem 0.5rem;
+      border: none;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.15);
+      color: white;
+      outline: none;
+      cursor: pointer;
+    }
+    .config-field-state select option { background: #a93226; }
+    #config-form button {
+      padding: 0.3rem 0.8rem;
+      background: white;
+      color: #c0392b;
+      border: none;
+      border-radius: 3px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #config-form button:hover { background: #f0f0f0; }
+    .config-hint { font-size: 0.72rem; opacity: 0.7; margin-top: 0.4rem; }
+
+    #map { flex: 1; position: relative; }
+    #map-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255,255,255,0.7);
+      font-size: 1rem;
+      color: #555;
+      pointer-events: none;
+    }
+    #map-overlay.hidden { display: none; }
+    .popup-title { font-weight: 700; margin-bottom: 0.25rem; }
+    .popup-time { font-size: 0.85rem; color: #555; }
+    .popup-addr { font-size: 0.85rem; margin-top: 0.25rem; }
+    .popup-addr a { color: #2980b9; text-decoration: none; }
+    .popup-addr a:hover { text-decoration: underline; }
+    .map-legend {
+      background: white;
+      padding: 0.5rem 0.65rem;
+      border-radius: 4px;
+      box-shadow: 0 1px 5px rgba(0,0,0,0.25);
+      font-size: 0.78rem;
+      line-height: 1.7;
+    }
+    .legend-row { display: flex; align-items: center; gap: 0.4rem; }
+    .legend-swatch {
+      width: 12px; height: 12px; border-radius: 50%;
+      flex-shrink: 0; border: 1px solid rgba(0,0,0,0.2);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-main">
+      <div>
+        <h1 id="header-title">Cousins Maine Lobster</h1>
+        <p id="header-sub">Loading…</p>
+      </div>
+      <span id="status"></span>
+      <button id="config-toggle" title="Change location">⚙</button>
+    </div>
+    <div id="config-panel">
+      <form id="config-form">
+        <div class="config-field-url">
+          <label for="input-url">CML location page URL</label>
+          <input id="input-url" type="url" placeholder="https://www.cousinsmainelobster.com/locations/…" />
+        </div>
+        <div class="config-field-state">
+          <label for="input-state">State</label>
+          <select id="input-state"></select>
+        </div>
+        <button type="submit">Load</button>
+      </form>
+      <p class="config-hint">Enter any CML location page URL and the two-letter state abbreviation to filter stops.</p>
+    </div>
+  </header>
+  <div id="map">
+    <div id="map-overlay">Loading schedule…</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // --- Config from URL params ---
+    const DEFAULT_URL   = 'https://www.cousinsmainelobster.com/locations/springfield-il';
+    const DEFAULT_STATE = 'IL';
+
+    const STATE_NAMES = {
+      AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',
+      CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',
+      IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',
+      ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',
+      MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',
+      NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',
+      OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',
+      TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',
+      WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming',DC:'Washington DC',
+    };
+
+    function getConfig() {
+      const p = new URLSearchParams(window.location.search);
+      return {
+        locationUrl: p.get('locationUrl') || DEFAULT_URL,
+        state: (p.get('state') || DEFAULT_STATE).toUpperCase(),
+      };
+    }
+
+    function setConfig(locationUrl, state) {
+      const p = new URLSearchParams();
+      if (locationUrl !== DEFAULT_URL)   p.set('locationUrl', locationUrl);
+      if (state.toUpperCase() !== DEFAULT_STATE) p.set('state', state.toUpperCase());
+      const qs = p.toString();
+      window.location.search = qs; // triggers page reload with new params
+    }
+
+    // --- Map setup ---
+    const map = L.map('map').setView([39.8, -89.6], 7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    }).addTo(map);
+
+    // --- Header wiring ---
+    const { locationUrl, state } = getConfig();
+    const stateName = STATE_NAMES[state] || state;
+
+    document.getElementById('header-sub').textContent = `Upcoming food truck stops in ${stateName}`;
+    document.title = `CML ${stateName} Schedule`;
+
+    // Try to derive a readable location name from the URL slug
+    const slug = locationUrl.split('/locations/')[1]?.replace(/-/g, ' ') || '';
+    if (slug) {
+      document.getElementById('header-title').textContent =
+        'Cousins Maine Lobster — ' + slug.replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    // Config panel
+    const configToggle = document.getElementById('config-toggle');
+    const configPanel  = document.getElementById('config-panel');
+    const inputUrl     = document.getElementById('input-url');
+    const inputState   = document.getElementById('input-state');
+
+    // Populate state dropdown
+    Object.entries(STATE_NAMES)
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .forEach(([abbr, name]) => {
+        const opt = document.createElement('option');
+        opt.value = abbr;
+        opt.textContent = `${name} (${abbr})`;
+        if (abbr === state) opt.selected = true;
+        inputState.appendChild(opt);
+      });
+
+    inputUrl.value = locationUrl;
+
+    configToggle.addEventListener('click', () => configPanel.classList.toggle('open'));
+    document.getElementById('config-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const url = inputUrl.value.trim();
+      const st  = inputState.value;
+      if (!url || !st) return;
+      setConfig(url, st);
+    });
+
+    // --- Day colors (Sun–Sat) ---
+    const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const DAY_COLORS = ['#e67e22','#2980b9','#27ae60','#8e44ad','#16a085','#c0392b','#d81b60'];
+
+    function dayIndex(isoUtc, timezone) {
+      const name = new Date(isoUtc).toLocaleDateString('en-US', { timeZone: timezone || 'UTC', weekday: 'long' });
+      return DAYS.indexOf(name);
+    }
+
+    function pinIcon(color) {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="36" viewBox="0 0 24 36">
+        <path d="M12 0C5.37 0 0 5.37 0 12c0 9 12 24 12 24S24 21 24 12C24 5.37 18.63 0 12 0z"
+              fill="${color}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5"/>
+        <circle cx="12" cy="12" r="4.5" fill="white" fill-opacity="0.5"/>
+      </svg>`;
+      return L.divIcon({
+        className: '',
+        html: svg,
+        iconSize: [24, 36],
+        iconAnchor: [12, 36],
+        popupAnchor: [0, -38],
+      });
+    }
+
+    // --- Fetch schedule ---
+    const statusEl  = document.getElementById('status');
+    const overlayEl = document.getElementById('map-overlay');
+    statusEl.textContent = 'Loading…';
+
+    const apiUrl = '/api/schedule?' + new URLSearchParams({ locationUrl, state });
+
+    fetch(apiUrl)
+      .then(r => {
+        if (!r.ok) throw new Error(`API returned ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        overlayEl.classList.add('hidden');
+        if (!data.stops || data.stops.length === 0) {
+          statusEl.textContent = `No upcoming ${state} stops found`;
+          return;
+        }
+
+        const bounds = [];
+        const daysPresent = new Set();
+
+        for (const stop of data.stops) {
+          const di = dayIndex(stop.start, stop.timezone);
+          const color = DAY_COLORS[di] ?? '#666';
+          daysPresent.add(di);
+
+          const mapsUrl = `https://maps.google.com/?q=${encodeURIComponent(stop.address)}`;
+          const marker = L.marker([stop.lat, stop.lng], { icon: pinIcon(color) }).addTo(map);
+          marker.bindPopup(`
+            <div class="popup-title">${escHtml(stop.title)}</div>
+            <div class="popup-time">${formatRange(stop.start, stop.end, stop.timezone, stop.isAllDay)}</div>
+            <div class="popup-addr"><a href="${mapsUrl}" target="_blank" rel="noopener noreferrer">${escHtml(stop.address)}</a></div>
+          `);
+          bounds.push([stop.lat, stop.lng]);
+        }
+
+        if (bounds.length) map.fitBounds(bounds, { padding: [40, 40] });
+        statusEl.textContent = `${data.stops.length} stop${data.stops.length === 1 ? '' : 's'} · updated ${formatFetchedAt(data.fetchedAt)}`;
+
+        // Legend — only days that appear in results
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = () => {
+          const div = L.DomUtil.create('div', 'map-legend');
+          div.innerHTML = [...daysPresent].sort().map(di =>
+            `<div class="legend-row">
+              <span class="legend-swatch" style="background:${DAY_COLORS[di]}"></span>
+              ${DAYS[di]}
+            </div>`
+          ).join('');
+          return div;
+        };
+        legend.addTo(map);
+      })
+      .catch(err => {
+        overlayEl.classList.add('hidden');
+        statusEl.textContent = 'Failed to load schedule';
+        console.error(err);
+      });
+
+    // --- Helpers ---
+    function escHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function formatRange(start, end, tz, isAllDay) {
+      const opts = { timeZone: tz || 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric' };
+      if (isAllDay) return new Date(start).toLocaleDateString('en-US', opts);
+      const fmtTime    = dt => new Date(dt).toLocaleString('en-US', { ...opts, hour: 'numeric', minute: '2-digit' });
+      const fmtEndTime = dt => new Date(dt).toLocaleTimeString('en-US', { timeZone: tz || 'America/Chicago', hour: 'numeric', minute: '2-digit' });
+      return end ? `${fmtTime(start)} – ${fmtEndTime(end)}` : fmtTime(start);
+    }
+
+    function formatFetchedAt(iso) {
+      return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    }
+  </script>
+</body>
+</html>
