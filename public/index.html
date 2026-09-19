@@ -36,49 +36,54 @@
       border-top: 1px solid rgba(255,255,255,0.15);
     }
     #config-panel.open { display: block; }
-    #config-form {
+    #config-form { display: flex; flex-direction: column; gap: 0.4rem; }
+    .location-entry {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
-      align-items: flex-end;
+      gap: 0.4rem;
+      align-items: center;
     }
-    #config-form label { font-size: 0.75rem; opacity: 0.85; display: block; margin-bottom: 0.2rem; }
-    #config-form input {
+    .location-entry label { font-size: 0.75rem; opacity: 0.85; display: block; margin-bottom: 0.15rem; }
+    .entry-url-wrap { flex: 1 1 240px; }
+    .entry-url-wrap input {
+      width: 100%;
       font-size: 0.85rem;
       padding: 0.3rem 0.5rem;
-      border: none;
-      border-radius: 3px;
+      border: none; border-radius: 3px;
       background: rgba(255,255,255,0.15);
-      color: white;
-      outline: none;
+      color: white; outline: none;
     }
-    #config-form input::placeholder { color: rgba(255,255,255,0.5); }
-    #config-form input:focus { background: rgba(255,255,255,0.25); }
-    .config-field-url { flex: 1 1 280px; }
-    .config-field-url input { width: 100%; }
-    .config-field-state select {
+    .entry-url-wrap input::placeholder { color: rgba(255,255,255,0.5); }
+    .entry-url-wrap input:focus { background: rgba(255,255,255,0.25); }
+    .entry-state-wrap select {
       font-size: 0.85rem;
       padding: 0.3rem 0.5rem;
-      border: none;
-      border-radius: 3px;
+      border: none; border-radius: 3px;
       background: rgba(255,255,255,0.15);
-      color: white;
-      outline: none;
-      cursor: pointer;
+      color: white; outline: none; cursor: pointer;
     }
-    .config-field-state select option { background: #a93226; }
-    #config-form button {
+    .entry-state-wrap select option { background: #a93226; }
+    .btn-remove {
+      background: none; border: none; color: white;
+      font-size: 1.1rem; cursor: pointer; opacity: 0.6;
+      padding: 0 0.2rem; line-height: 1;
+    }
+    .btn-remove:hover { opacity: 1; }
+    .config-actions { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.15rem; }
+    .btn-add {
+      background: none; border: 1px solid rgba(255,255,255,0.4);
+      color: white; border-radius: 3px;
+      font-size: 0.8rem; padding: 0.25rem 0.6rem; cursor: pointer;
+    }
+    .btn-add:hover { background: rgba(255,255,255,0.1); }
+    .btn-load {
       padding: 0.3rem 0.8rem;
-      background: white;
-      color: #c0392b;
-      border: none;
-      border-radius: 3px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      cursor: pointer;
+      background: white; color: #c0392b;
+      border: none; border-radius: 3px;
+      font-size: 0.85rem; font-weight: 600; cursor: pointer;
     }
-    #config-form button:hover { background: #f0f0f0; }
-    .config-hint { font-size: 0.72rem; opacity: 0.7; margin-top: 0.4rem; }
+    .btn-load:hover { background: #f0f0f0; }
+    .config-hint { font-size: 0.72rem; opacity: 0.7; margin-top: 0.3rem; }
 
     #map { flex: 1; position: relative; }
     #map-overlay {
@@ -126,17 +131,13 @@
     </div>
     <div id="config-panel">
       <form id="config-form">
-        <div class="config-field-url">
-          <label for="input-url">CML location page URL</label>
-          <input id="input-url" type="url" placeholder="https://www.cousinsmainelobster.com/locations/…" />
+        <div id="locations-list"></div>
+        <div class="config-actions">
+          <button type="button" class="btn-add" id="btn-add">+ Add location</button>
+          <button type="submit" class="btn-load">Load</button>
         </div>
-        <div class="config-field-state">
-          <label for="input-state">State</label>
-          <select id="input-state"></select>
-        </div>
-        <button type="submit">Load</button>
       </form>
-      <p class="config-hint">Enter any CML location page URL and the two-letter state abbreviation to filter stops.</p>
+      <p class="config-hint">Add any CML location page URL and its state to show stops from multiple markets.</p>
     </div>
   </header>
   <div id="map">
@@ -163,18 +164,24 @@
 
     function getConfig() {
       const p = new URLSearchParams(window.location.search);
-      return {
-        locationUrl: p.get('locationUrl') || DEFAULT_URL,
-        state: (p.get('state') || DEFAULT_STATE).toUpperCase(),
-      };
+      const urls = p.getAll('locationUrl');
+      const states = p.getAll('state');
+      if (urls.length === 0) return [{ locationUrl: DEFAULT_URL, state: DEFAULT_STATE }];
+      return urls.map((url, i) => ({ locationUrl: url, state: (states[i] || DEFAULT_STATE).toUpperCase() }));
     }
 
-    function setConfig(locationUrl, state) {
+    function setConfig(locations) {
       const p = new URLSearchParams();
-      if (locationUrl !== DEFAULT_URL)   p.set('locationUrl', locationUrl);
-      if (state.toUpperCase() !== DEFAULT_STATE) p.set('state', state.toUpperCase());
-      const qs = p.toString();
-      window.location.search = qs; // triggers page reload with new params
+      const isDefault = locations.length === 1
+        && locations[0].locationUrl === DEFAULT_URL
+        && locations[0].state === DEFAULT_STATE;
+      if (!isDefault) {
+        for (const loc of locations) {
+          p.append('locationUrl', loc.locationUrl);
+          p.append('state', loc.state);
+        }
+      }
+      window.location.search = p.toString();
     }
 
     // --- Map setup ---
@@ -185,45 +192,89 @@
     }).addTo(map);
 
     // --- Header wiring ---
-    const { locationUrl, state } = getConfig();
-    const stateName = STATE_NAMES[state] || state;
+    const locations = getConfig();
 
-    document.getElementById('header-sub').textContent = `Upcoming food truck stops in ${stateName}`;
-    document.title = `CML ${stateName} Schedule`;
+    const stateNames = [...new Set(locations.map(l => STATE_NAMES[l.state] || l.state))];
+    document.getElementById('header-sub').textContent =
+      `Upcoming food truck stops in ${stateNames.join(', ')}`;
+    document.title = `CML Schedule — ${stateNames.join(', ')}`;
 
-    // Try to derive a readable location name from the URL slug
-    const slug = locationUrl.split('/locations/')[1]?.replace(/-/g, ' ') || '';
-    if (slug) {
-      document.getElementById('header-title').textContent =
+    if (locations.length === 1) {
+      const slug = locations[0].locationUrl.split('/locations/')[1]?.replace(/-/g, ' ') || '';
+      if (slug) document.getElementById('header-title').textContent =
         'Cousins Maine Lobster — ' + slug.replace(/\b\w/g, c => c.toUpperCase());
     }
 
-    // Config panel
-    const configToggle = document.getElementById('config-toggle');
-    const configPanel  = document.getElementById('config-panel');
-    const inputUrl     = document.getElementById('input-url');
-    const inputState   = document.getElementById('input-state');
+    // --- Config panel ---
+    const configToggle  = document.getElementById('config-toggle');
+    const configPanel   = document.getElementById('config-panel');
+    const locationsList = document.getElementById('locations-list');
 
-    // Populate state dropdown
-    Object.entries(STATE_NAMES)
-      .sort((a, b) => a[1].localeCompare(b[1]))
-      .forEach(([abbr, name]) => {
+    const sortedStates = Object.entries(STATE_NAMES).sort((a, b) => a[1].localeCompare(b[1]));
+
+    function makeStateSelect(selectedAbbr) {
+      const sel = document.createElement('select');
+      for (const [abbr, name] of sortedStates) {
         const opt = document.createElement('option');
         opt.value = abbr;
         opt.textContent = `${name} (${abbr})`;
-        if (abbr === state) opt.selected = true;
-        inputState.appendChild(opt);
+        if (abbr === selectedAbbr) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      return sel;
+    }
+
+    function addLocationEntry(locationUrl = '', state = DEFAULT_STATE) {
+      const entry = document.createElement('div');
+      entry.className = 'location-entry';
+
+      const urlWrap = document.createElement('div');
+      urlWrap.className = 'entry-url-wrap';
+      const urlLabel = document.createElement('label');
+      urlLabel.textContent = 'CML location page URL';
+      const urlInput = document.createElement('input');
+      urlInput.type = 'url';
+      urlInput.placeholder = 'https://www.cousinsmainelobster.com/locations/…';
+      urlInput.value = locationUrl;
+      urlWrap.appendChild(urlLabel);
+      urlWrap.appendChild(urlInput);
+
+      const stateWrap = document.createElement('div');
+      stateWrap.className = 'entry-state-wrap';
+      const stateLabel = document.createElement('label');
+      stateLabel.textContent = 'State';
+      const stateSelect = makeStateSelect(state);
+      stateWrap.appendChild(stateLabel);
+      stateWrap.appendChild(stateSelect);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'btn-remove';
+      removeBtn.textContent = '×';
+      removeBtn.title = 'Remove';
+      removeBtn.addEventListener('click', () => {
+        if (locationsList.children.length > 1) entry.remove();
       });
 
-    inputUrl.value = locationUrl;
+      entry.appendChild(urlWrap);
+      entry.appendChild(stateWrap);
+      entry.appendChild(removeBtn);
+      locationsList.appendChild(entry);
+    }
 
+    // Populate with current config
+    for (const loc of locations) addLocationEntry(loc.locationUrl, loc.state);
+
+    document.getElementById('btn-add').addEventListener('click', () => addLocationEntry());
     configToggle.addEventListener('click', () => configPanel.classList.toggle('open'));
+
     document.getElementById('config-form').addEventListener('submit', e => {
       e.preventDefault();
-      const url = inputUrl.value.trim();
-      const st  = inputState.value;
-      if (!url || !st) return;
-      setConfig(url, st);
+      const entries = [...locationsList.querySelectorAll('.location-entry')].map(entry => ({
+        locationUrl: entry.querySelector('input').value.trim(),
+        state: entry.querySelector('select').value,
+      })).filter(loc => loc.locationUrl);
+      if (entries.length) setConfig(entries);
     });
 
     // --- Day colors (Sun–Sat) ---
@@ -255,7 +306,12 @@
     const overlayEl = document.getElementById('map-overlay');
     statusEl.textContent = 'Loading…';
 
-    const apiUrl = '/api/schedule?' + new URLSearchParams({ locationUrl, state });
+    const apiParams = new URLSearchParams();
+    for (const loc of locations) {
+      apiParams.append('locationUrl', loc.locationUrl);
+      apiParams.append('state', loc.state);
+    }
+    const apiUrl = '/api/schedule?' + apiParams;
 
     fetch(apiUrl)
       .then(r => {
@@ -265,7 +321,7 @@
       .then(data => {
         overlayEl.classList.add('hidden');
         if (!data.stops || data.stops.length === 0) {
-          statusEl.textContent = `No upcoming ${state} stops found`;
+          statusEl.textContent = `No upcoming stops found`;
           return;
         }
 
